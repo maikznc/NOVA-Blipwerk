@@ -1,0 +1,65 @@
+name: Build Nova Blipwerk
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: Mac (AU + VST3 + App)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Projekt finden
+        shell: bash
+        run: |
+          CM=$(grep -rl --include=CMakeLists.txt "juce_add_plugin(NovaBlipwerk" . 2>/dev/null | head -1 || true)
+          if [ -z "$CM" ]; then
+            Z=$(find . -maxdepth 3 -iname "*.zip" | head -1 || true)
+            if [ -n "$Z" ]; then
+              mkdir -p _src && unzip -q "$Z" -d _src
+              CM=$(grep -rl --include=CMakeLists.txt "juce_add_plugin(NovaBlipwerk" _src | head -1 || true)
+            fi
+          fi
+          if [ -z "$CM" ]; then
+            echo "::error::Projekt nicht gefunden. Liegt CMakeLists.txt von Nova Blipwerk im Repository?"
+            exit 1
+          fi
+          echo "PROJ=$(dirname "$CM")" >> "$GITHUB_ENV"
+          echo "Projekt gefunden in: $(dirname "$CM")"
+
+      - name: Bauen (Apple Silicon + Intel)
+        shell: bash
+        run: |
+          cd "$PROJ"
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          cmake --build build --config Release --parallel 4
+
+      - name: Paket schnueren
+        shell: bash
+        run: |
+          ART="$PROJ/build/NovaBlipwerk_artefacts/Release"
+          OUT="dist/Nova Blipwerk"
+          mkdir -p "$OUT"
+          cp -R "$ART/AU/Nova Blipwerk.component" "$OUT/"
+          cp -R "$ART/VST3/Nova Blipwerk.vst3" "$OUT/"
+          cp -R "$ART/Standalone/Nova Blipwerk.app" "$OUT/"
+          for b in "$OUT"/*.component "$OUT"/*.vst3 "$OUT"/*.app; do
+            codesign --force --deep --sign - "$b"
+          done
+          cp "$PROJ/INSTALLATION.md" "$OUT/" 2>/dev/null || true
+          cat > "$OUT/Installieren.command" <<'SCRIPT'
+          #!/bin/bash
+          # Nova Blipwerk - Installation fuer macOS
+          # Start im Terminal:  bash "/Pfad/zu/Nova Blipwerk/Installieren.command"
+          set -e
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          COMP="$HOME/Library/Audio/Plug-Ins/Components"
+          VST3="$HOME/Library/Audio/Plug-Ins/VST3"
+          echo ""
+          echo "  NOVA Blipwerk wird installiert"
+          echo "  ------------------------------"
+          if [ ! -d "$DIR/Nova Blipwerk.component" ] || [ ! -d "$DIR/Nova Blipwerk.vst3" ]; then
+            echo "  Die Plugin-Dateien liegen nicht neben diesem Script."
+            echo "  Bitte das Script im entpackten Ordner \"Nova Blipwerk\" starten."
