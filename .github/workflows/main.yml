@@ -63,3 +63,96 @@ jobs:
           if [ ! -d "$DIR/Nova Blipwerk.component" ] || [ ! -d "$DIR/Nova Blipwerk.vst3" ]; then
             echo "  Die Plugin-Dateien liegen nicht neben diesem Script."
             echo "  Bitte das Script im entpackten Ordner \"Nova Blipwerk\" starten."
+            exit 1
+          fi
+          mkdir -p "$COMP" "$VST3"
+          rm -rf "$COMP/Nova Blipwerk.component" "$VST3/Nova Blipwerk.vst3"
+          cp -R "$DIR/Nova Blipwerk.component" "$COMP/"
+          cp -R "$DIR/Nova Blipwerk.vst3" "$VST3/"
+          echo "  OK  Audio Unit  ->  $COMP"
+          echo "  OK  VST3        ->  $VST3"
+          xattr -dr com.apple.quarantine "$COMP/Nova Blipwerk.component" 2>/dev/null || true
+          xattr -dr com.apple.quarantine "$VST3/Nova Blipwerk.vst3" 2>/dev/null || true
+          echo "  OK  Quarantaene-Flag entfernt"
+          if [ -d "$DIR/Nova Blipwerk.app" ]; then
+            rm -rf "/Applications/Nova Blipwerk.app" 2>/dev/null || true
+            if cp -R "$DIR/Nova Blipwerk.app" /Applications/ 2>/dev/null; then
+              xattr -dr com.apple.quarantine "/Applications/Nova Blipwerk.app" 2>/dev/null || true
+              echo "  OK  Standalone-App  ->  /Applications"
+            fi
+          fi
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          echo "  ... Audio Unit wird geprueft"
+          if auval -v aumu Nblw Nova > /tmp/nova-blipwerk-auval.log 2>&1; then
+            echo "  OK  Audio Unit geprueft"
+          else
+            echo "  !   auval meldet ein Problem, Details: /tmp/nova-blipwerk-auval.log"
+          fi
+          echo ""
+          echo "  Fertig. DAW neu starten oder Plugins neu scannen."
+          echo "  Hersteller \"Nova\", Name \"Nova Blipwerk\"."
+          echo ""
+          SCRIPT
+          chmod +x "$OUT/Installieren.command"
+          (cd dist && ditto -c -k --sequesterRsrc --keepParent "Nova Blipwerk" ../NovaBlipwerk-macOS.zip)
+
+      - name: Audio Unit pruefen (auval)
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "dist/Nova Blipwerk/Nova Blipwerk.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          auval -v aumu Nblw Nova
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NovaBlipwerk-macOS
+          path: NovaBlipwerk-macOS.zip
+
+  windows:
+    name: Windows (VST3 + App)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Projekt finden
+        shell: bash
+        run: |
+          CM=$(grep -rl --include=CMakeLists.txt "juce_add_plugin(NovaBlipwerk" . 2>/dev/null | head -1 || true)
+          if [ -z "$CM" ]; then
+            Z=$(find . -maxdepth 3 -iname "*.zip" | head -1 || true)
+            if [ -n "$Z" ]; then
+              mkdir -p _src && (unzip -q "$Z" -d _src || 7z x -o_src "$Z" > /dev/null)
+              CM=$(grep -rl --include=CMakeLists.txt "juce_add_plugin(NovaBlipwerk" _src | head -1 || true)
+            fi
+          fi
+          if [ -z "$CM" ]; then
+            echo "::error::Projekt nicht gefunden. Liegt CMakeLists.txt von Nova Blipwerk im Repository?"
+            exit 1
+          fi
+          echo "PROJ=$(dirname "$CM")" >> "$GITHUB_ENV"
+          echo "Projekt gefunden in: $(dirname "$CM")"
+
+      - name: Bauen
+        shell: bash
+        run: |
+          cd "$PROJ"
+          cmake -B build -A x64
+          cmake --build build --config Release --parallel 4
+
+      - name: Paket schnueren
+        shell: pwsh
+        run: |
+          $art = "$env:PROJ/build/NovaBlipwerk_artefacts/Release"
+          $out = "dist/Nova Blipwerk"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Recurse "$art/VST3/Nova Blipwerk.vst3" $out
+          Copy-Item "$art/Standalone/Nova Blipwerk.exe" $out
+          if (Test-Path "$env:PROJ/INSTALLATION.md") { Copy-Item "$env:PROJ/INSTALLATION.md" $out }
+          Compress-Archive -Path "dist/Nova Blipwerk" -DestinationPath NovaBlipwerk-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NovaBlipwerk-Windows
+          path: NovaBlipwerk-Windows.zip
